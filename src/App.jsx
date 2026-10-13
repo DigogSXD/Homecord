@@ -6,7 +6,6 @@ import ServerSidebar from './components/ServerSidebar';
 import ChannelList from './components/ChannelList';
 import VoiceBar from './components/VoiceBar';
 import ChatArea from './components/ChatArea';
-import UserList from './components/UserList';
 
 import LoginModal from './components/LoginModal';
 import CreateChannelModal from './components/CreateChannelModal';
@@ -43,15 +42,17 @@ export default function App() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [screenStream, setScreenStream] = useState(null);
-  const [remoteScreenStreams, setRemoteScreenStreams] = useState({}); // socketId -> MediaStream
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [cameraStream, setCameraStream] = useState(null);
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState({}); // socketId -> streamId -> MediaStream
   const [ping, setPing] = useState(12);
+  const muteStateBeforeDeafenRef = useRef(false);
 
   // UI Modals & Sidebars
   const [showShareModal, setShowShareModal] = useState(false);
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
   const [createChannelDefaultType, setCreateChannelDefaultType] = useState('text');
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [showUserSidebar, setShowUserSidebar] = useState(true);
 
   // Per-user audio controls & context menu modal
   const [userVolumes, setUserVolumes] = useState({}); // socketId -> volume number (0 to 100)
@@ -91,8 +92,14 @@ export default function App() {
   // WebRTC Refs
   const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
+  const cameraStreamRef = useRef(null);
   const peerConnectionsRef = useRef({}); // socketId -> RTCPeerConnection
-  const remoteAudioElementsRef = useRef({}); // socketId -> HTMLAudioElement
+  const remoteAudioElementsRef = useRef({}); // socketId -> HTMLAudioElement (Voice Mic)
+  const remoteScreenAudioElementsRef = useRef({}); // socketId -> HTMLAudioElement (Screen Share Audio)
+  const [screenAudioVolumes, setScreenAudioVolumes] = useState({}); // socketId -> volume (0-100)
+  const [screenAudioMutes, setScreenAudioMutes] = useState({}); // socketId -> boolean
+  const [audioNotice, setAudioNotice] = useState(null);
+  const voiceRoomsRef = useRef({});
   const animFrameRef = useRef(null);
 
   // Connect socket on mount
@@ -126,6 +133,7 @@ export default function App() {
       setMessages(data.messages || {});
       setUsers(data.users || []);
       setVoiceRooms(data.voiceRooms || {});
+      voiceRoomsRef.current = data.voiceRooms || {};
 
       // Set default text channel if none selected
       const firstText = (data.channels || []).find(c => c.type === 'text');
@@ -184,6 +192,7 @@ export default function App() {
 
     const handleVoiceStateUpdate = (roomsState) => {
       setVoiceRooms(roomsState);
+      voiceRoomsRef.current = roomsState;
     };
 
     const handlePeerJoined = async ({ socketId, user }) => {
@@ -213,12 +222,27 @@ export default function App() {
       }
     };
 
-    const handleVoiceStreamChanged = ({ socketId, isStreaming }) => {
+    const handleVoiceStreamChanged = ({ socketId, isStreaming, streamId }) => {
       playSound(isStreaming ? 'stream_start' : 'stream_stop');
       if (!isStreaming && socketId) {
+        if (remoteScreenAudioElementsRef.current[socketId]) {
+          remoteScreenAudioElementsRef.current[socketId].pause();
+          remoteScreenAudioElementsRef.current[socketId].srcObject = null;
+          delete remoteScreenAudioElementsRef.current[socketId];
+        }
         setRemoteScreenStreams(prev => {
           const copy = { ...prev };
-          delete copy[socketId];
+          if (copy[socketId]) {
+            const streams = { ...copy[socketId] };
+            if (streamId) {
+              delete streams[streamId];
+            }
+            if (Object.keys(streams).length > 0) {
+              copy[socketId] = streams;
+            } else {
+              delete copy[socketId];
+            }
+          }
           return copy;
         });
       }
@@ -526,7 +550,10 @@ export default function App() {
 
   const handleSelectAudioOutput = async (deviceId) => {
     setSelectedAudioOutput(deviceId);
-    for (const audioEl of Object.values(remoteAudioElementsRef.current)) {
+    for (const audioEl of [
+      ...Object.values(remoteAudioElementsRef.current),
+      ...Object.values(remoteScreenAudioElementsRef.current)
+    ]) {
       if (audioEl && typeof audioEl.setSinkId === 'function') {
         try {
           await audioEl.setSinkId(deviceId);
@@ -599,8 +626,14 @@ export default function App() {
       screenStreamRef.current.getTracks().forEach(t => t.stop());
       screenStreamRef.current = null;
     }
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(t => t.stop());
+      cameraStreamRef.current = null;
+    }
     setScreenStream(null);
     setIsScreenSharing(false);
+    setCameraStream(null);
+    setIsCameraOn(false);
 
     // Stop local mic tracks
     if (localStreamRef.current) {
@@ -611,6 +644,12 @@ export default function App() {
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
     }
+
+    Object.values(remoteScreenAudioElementsRef.current).forEach(audio => {
+      audio.pause();
+      audio.srcObject = null;
+    });
+    remoteScreenAudioElementsRef.current = {};
 
     Object.keys(peerConnectionsRef.current).forEach(id => cleanupPeer(id));
 
@@ -637,7 +676,124 @@ export default function App() {
     }
   };
 
+  // Helper function to boost WebRTC audio sender quality for screen/system sound (256 kbps Stereo)
+  const boostAudioSenderQuality = async (sender) => {
+    if (!sender) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}];
+      }
+      params.encodings[0].maxBitrate = 256000; // 256 kbps (High-fidelity stereo audio)
+      await sender.setParameters(params);
+    } catch (e) {
+      console.warn('Bitrate de áudio de alta definição não suportado:', e);
+    }
+  };
+
   // --- SCREEN SHARE LOGIC ---
+  const handleToggleCamera = async () => {
+    if (!activeVoiceChannel) {
+      alert('Entre em um canal de voz primeiro para ativar sua webcam!');
+      return;
+    }
+
+    if (isCameraOn) {
+      const cameraTrack = cameraStreamRef.current?.getVideoTracks()[0];
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach(track => track.stop());
+        cameraStreamRef.current = null;
+      }
+      setCameraStream(null);
+      setIsCameraOn(false);
+      socket.emit('voice:camera_update', { channelId: activeVoiceChannel.id, isCameraOn: false });
+
+      for (const [peerSocketId, pc] of Object.entries(peerConnectionsRef.current)) {
+        const videoSender = pc.getSenders().find(sender => sender.track === cameraTrack);
+        if (videoSender) {
+          pc.removeTrack(videoSender);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('voice:signal', { to: peerSocketId, signalData: { sdp: pc.localDescription } });
+        }
+      }
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+        audio: false
+      });
+      const videoTrack = stream.getVideoTracks()[0];
+      cameraStreamRef.current = stream;
+      setCameraStream(stream);
+      setIsCameraOn(true);
+      socket.emit('voice:camera_update', { channelId: activeVoiceChannel.id, isCameraOn: true, streamId: stream.id, trackId: videoTrack.id });
+      videoTrack.onended = () => {
+        cameraStreamRef.current = null;
+        setCameraStream(null);
+        setIsCameraOn(false);
+        if (activeVoiceChannel) {
+          socket.emit('voice:camera_update', { channelId: activeVoiceChannel.id, isCameraOn: false, streamId: stream.id, trackId: videoTrack.id });
+        }
+      };
+
+      for (const [peerSocketId, pc] of Object.entries(peerConnectionsRef.current)) {
+        const videoSender = pc.addTrack(videoTrack, stream);
+        await boostSenderQuality(videoSender);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('voice:signal', { to: peerSocketId, signalData: { sdp: pc.localDescription } });
+      }
+    } catch (err) {
+      console.warn('Webcam não acessível:', err);
+    }
+  };
+
+  const stopScreenShare = async () => {
+    const currentStream = screenStreamRef.current;
+    const tracksToStop = currentStream ? currentStream.getTracks() : [];
+
+    if (activeVoiceChannel && currentStream) {
+      socket.emit('voice:stream_update', {
+        channelId: activeVoiceChannel.id,
+        isStreaming: false,
+        streamId: currentStream.id
+      });
+    }
+
+    tracksToStop.forEach(t => {
+      t.onended = null;
+      t.stop();
+    });
+    screenStreamRef.current = null;
+    setScreenStream(null);
+    setIsScreenSharing(false);
+
+    for (const [peerSocketId, pc] of Object.entries(peerConnectionsRef.current)) {
+      try {
+        const senders = pc.getSenders();
+        let removed = false;
+        tracksToStop.forEach(t => {
+          const sender = senders.find(s => s.track === t);
+          if (sender) {
+            pc.removeTrack(sender);
+            removed = true;
+          }
+        });
+        if (removed) {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('voice:signal', {
+            to: peerSocketId,
+            signalData: { sdp: pc.localDescription }
+          });
+        }
+      } catch (e) {}
+    }
+  };
+
   const handleToggleScreenShare = async () => {
     if (!activeVoiceChannel) {
       alert('Entre em um canal de voz primeiro para transmitir sua tela!');
@@ -645,75 +801,104 @@ export default function App() {
     }
 
     if (isScreenSharing) {
-      // Stop sharing
-      socket.emit('voice:stream_update', { channelId: activeVoiceChannel.id, isStreaming: false });
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(t => t.stop());
-        screenStreamRef.current = null;
-      }
-      setScreenStream(null);
-      setIsScreenSharing(false);
-
-      for (const [peerSocketId, pc] of Object.entries(peerConnectionsRef.current)) {
+      await stopScreenShare();
+    } else {
+      // Start Screen Share with Video + Audio (System Audio / Tab Sound)
+      try {
+        let stream;
         try {
-          const senders = pc.getSenders();
-          const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-          if (videoSender) {
-            pc.removeTrack(videoSender);
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit('voice:signal', {
-              to: peerSocketId,
-              signalData: { sdp: pc.localDescription }
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              cursor: 'always',
+              width: { ideal: 1920, max: 3840 },
+              height: { ideal: 1080, max: 2160 },
+              frameRate: { ideal: 60, max: 60 }
+            },
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+              suppressLocalAudioPlayback: false
+            },
+            systemAudio: 'include'
+          });
+        } catch (err1) {
+          if (err1.name === 'NotAllowedError' || err1.name === 'AbortError') return;
+          try {
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              video: {
+                cursor: 'always',
+                width: { ideal: 1920, max: 3840 },
+                height: { ideal: 1080, max: 2160 },
+                frameRate: { ideal: 60, max: 60 }
+              },
+              audio: true
+            });
+          } catch (err2) {
+            if (err2.name === 'NotAllowedError' || err2.name === 'AbortError') return;
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              video: {
+                cursor: 'always',
+                width: { ideal: 1920, max: 3840 },
+                height: { ideal: 1080, max: 2160 },
+                frameRate: { ideal: 60, max: 60 }
+              },
+              audio: false
             });
           }
-        } catch (e) {}
-      }
-    } else {
-      // Start Screen Share with 1080p 60FPS Ultra-HD Constraints
-      try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            cursor: 'always',
-            width: { ideal: 1920, max: 3840 },
-            height: { ideal: 1080, max: 2160 },
-            frameRate: { ideal: 60, max: 60 }
-          },
-          audio: false
-        });
+        }
+
+        if (!stream) return;
 
         const videoTrack = stream.getVideoTracks()[0];
+        const audioTrack = stream.getAudioTracks()[0];
+
         if (videoTrack && 'contentHint' in videoTrack) {
           videoTrack.contentHint = 'detail'; // Preserve sharp text & detail clarity
+        }
+        if (audioTrack && 'contentHint' in audioTrack) {
+          audioTrack.contentHint = 'music'; // Preserve full fidelity audio without speech filtering
         }
 
         screenStreamRef.current = stream;
         setScreenStream(stream);
         setIsScreenSharing(true);
 
-        socket.emit('voice:stream_update', { channelId: activeVoiceChannel.id, isStreaming: true });
+        const hasAudio = !!audioTrack;
+        if (!hasAudio) {
+          setAudioNotice('Dica: Para transmitir som de jogos ou vídeos, marque "Compartilhar áudio do sistema" na janela de seleção de tela.');
+          setTimeout(() => setAudioNotice(null), 8000);
+        } else {
+          setAudioNotice('Transmissão iniciada com Áudio HD do Sistema! 🔊');
+          setTimeout(() => setAudioNotice(null), 5000);
+        }
 
-        // When user stops sharing from browser bar
-        videoTrack.onended = () => {
-          setScreenStream(null);
-          setIsScreenSharing(false);
-          screenStreamRef.current = null;
-          if (activeVoiceChannel) {
-            socket.emit('voice:stream_update', { channelId: activeVoiceChannel.id, isStreaming: false });
-          }
-        };
+        socket.emit('voice:stream_update', {
+          channelId: activeVoiceChannel.id,
+          isStreaming: true,
+          streamId: stream.id,
+          trackId: videoTrack?.id,
+          hasAudio
+        });
+
+        // When user stops sharing from browser native bar
+        stream.getTracks().forEach(track => {
+          track.onended = () => {
+            stopScreenShare();
+          };
+        });
 
         // Add track and renegotiate WebRTC offer/answer with all peers
         for (const [peerSocketId, pc] of Object.entries(peerConnectionsRef.current)) {
           try {
-            const senders = pc.getSenders();
-            let videoSender = senders.find(s => s.track && s.track.kind === 'video');
-            if (videoSender) {
-              await videoSender.replaceTrack(videoTrack);
-            } else {
-              videoSender = pc.addTrack(videoTrack, stream);
+            for (const track of stream.getTracks()) {
+              const sender = pc.addTrack(track, stream);
+              if (track.kind === 'video') {
+                await boostSenderQuality(sender);
+              } else if (track.kind === 'audio') {
+                await boostAudioSenderQuality(sender);
+              }
             }
-            await boostSenderQuality(videoSender);
 
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
@@ -776,6 +961,37 @@ export default function App() {
     }
   };
 
+  const setupRemoteScreenAudio = (targetSocketId, stream) => {
+    const peerUser = users.find(u => u.id === targetSocketId);
+    if (peerUser && currentUser && peerUser.name === currentUser.name) {
+      return;
+    }
+
+    let audio = remoteScreenAudioElementsRef.current[targetSocketId];
+    if (!audio) {
+      audio = new Audio();
+      audio.autoplay = true;
+      if (selectedAudioOutput && typeof audio.setSinkId === 'function') {
+        audio.setSinkId(selectedAudioOutput).catch(() => {});
+      }
+      remoteScreenAudioElementsRef.current[targetSocketId] = audio;
+    }
+
+    if (audio.srcObject !== stream) {
+      audio.srcObject = stream;
+    }
+
+    const isMuted = isDeafened || !!screenAudioMutes[targetSocketId] || !!userMutes[targetSocketId];
+    audio.muted = isMuted;
+
+    const vol = screenAudioVolumes[targetSocketId] ?? 100;
+    audio.volume = Math.max(0, Math.min(1, vol / 100));
+
+    audio.play().catch(e => {
+      console.warn('Autoplay do áudio da transmissão bloqueado pelo navegador:', e);
+    });
+  };
+
   const createPeerConnection = async (targetSocketId, isInitiator) => {
     const pc = new RTCPeerConnection({
       iceServers: [
@@ -793,14 +1009,16 @@ export default function App() {
       });
     }
 
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach(track => {
-        const sender = pc.addTrack(track, screenStreamRef.current);
+    [screenStreamRef.current, cameraStreamRef.current].filter(Boolean).forEach(videoStream => {
+      videoStream.getTracks().forEach(track => {
+        const sender = pc.addTrack(track, videoStream);
         if (track.kind === 'video') {
           boostSenderQuality(sender);
+        } else if (track.kind === 'audio') {
+          boostAudioSenderQuality(sender);
         }
       });
-    }
+    });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -812,30 +1030,78 @@ export default function App() {
     };
 
     pc.ontrack = (event) => {
+      const stream = event.streams[0] || new MediaStream([event.track]);
+      const peerState = Object.values(voiceRoomsRef.current)
+        .flat()
+        .find(member => member.socketId === targetSocketId);
+
       if (event.track.kind === 'video') {
-        const stream = event.streams[0];
+        const streamKeys = [stream.id, event.track.id];
+        const knownType = event.track.id === peerState?.cameraTrackId || stream.id === peerState?.cameraStreamId
+          ? 'camera'
+          : 'screen';
+
         setRemoteScreenStreams(prev => ({
           ...prev,
-          [targetSocketId]: stream
+          [targetSocketId]: {
+            ...(prev[targetSocketId] || {}),
+            ...Object.fromEntries(streamKeys.map(key => [key, stream])),
+            [`${knownType}Stream`]: stream
+          }
         }));
+
+        if (knownType === 'screen') {
+          if (stream.getAudioTracks().length > 0) {
+            setupRemoteScreenAudio(targetSocketId, stream);
+          }
+          stream.onaddtrack = (e) => {
+            if (e.track.kind === 'audio') {
+              setupRemoteScreenAudio(targetSocketId, stream);
+            }
+          };
+        }
       } else {
+        // AUDIO TRACK
         const peerUser = users.find(u => u.id === targetSocketId);
         // Do NOT play audio element if target is self or matching user name
         if (peerUser && currentUser && peerUser.name === currentUser.name) {
           return;
         }
-        let audio = remoteAudioElementsRef.current[targetSocketId];
-        if (!audio) {
-          audio = new Audio();
-          audio.autoplay = true;
-          remoteAudioElementsRef.current[targetSocketId] = audio;
+
+        const isScreenAudio = (
+          stream.id === peerState?.screenStreamId ||
+          stream.getVideoTracks().length > 0 ||
+          (peerState?.isStreaming && event.track.id !== peerState?.micTrackId && stream.id !== peerState?.cameraStreamId)
+        );
+
+        if (isScreenAudio) {
+          setRemoteScreenStreams(prev => ({
+            ...prev,
+            [targetSocketId]: {
+              ...(prev[targetSocketId] || {}),
+              [stream.id]: stream,
+              screenStream: stream
+            }
+          }));
+          setupRemoteScreenAudio(targetSocketId, stream);
+        } else {
+          // Microphone Audio
+          let audio = remoteAudioElementsRef.current[targetSocketId];
+          if (!audio) {
+            audio = new Audio();
+            audio.autoplay = true;
+            if (selectedAudioOutput && typeof audio.setSinkId === 'function') {
+              audio.setSinkId(selectedAudioOutput).catch(() => {});
+            }
+            remoteAudioElementsRef.current[targetSocketId] = audio;
+          }
+          audio.srcObject = stream;
+          audio.muted = isDeafened || !!userMutes[targetSocketId];
+          if (userVolumes[targetSocketId] !== undefined) {
+            audio.volume = Math.max(0, Math.min(1, userVolumes[targetSocketId] / 100));
+          }
+          setupRemoteAudioAnalyser(targetSocketId, stream);
         }
-        audio.srcObject = event.streams[0];
-        audio.muted = isDeafened || !!userMutes[targetSocketId];
-        if (userVolumes[targetSocketId] !== undefined) {
-          audio.volume = Math.max(0, Math.min(1, userVolumes[targetSocketId] / 100));
-        }
-        setupRemoteAudioAnalyser(targetSocketId, event.streams[0]);
       }
     };
 
@@ -859,6 +1125,11 @@ export default function App() {
     if (remoteAudioElementsRef.current[targetSocketId]) {
       remoteAudioElementsRef.current[targetSocketId].srcObject = null;
       delete remoteAudioElementsRef.current[targetSocketId];
+    }
+    if (remoteScreenAudioElementsRef.current[targetSocketId]) {
+      remoteScreenAudioElementsRef.current[targetSocketId].pause();
+      remoteScreenAudioElementsRef.current[targetSocketId].srcObject = null;
+      delete remoteScreenAudioElementsRef.current[targetSocketId];
     }
     setRemoteScreenStreams(prev => {
       const copy = { ...prev };
@@ -929,7 +1200,7 @@ export default function App() {
 
   // Toggle Mute / Deafen
   const handleToggleMute = () => {
-    const newMute = !isMuted;
+    const newMute = isDeafened ? true : !isMuted;
     setIsMuted(newMute);
     playSound(newMute ? 'mute' : 'unmute');
 
@@ -974,17 +1245,33 @@ export default function App() {
 
   const handleToggleDeafen = () => {
     const newDeaf = !isDeafened;
+    if (newDeaf) {
+      muteStateBeforeDeafenRef.current = isMuted;
+    }
+    const effectiveMute = newDeaf ? true : muteStateBeforeDeafenRef.current;
+
     setIsDeafened(newDeaf);
+    setIsMuted(effectiveMute);
     playSound(newDeaf ? 'mute' : 'unmute');
 
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => {
+        track.enabled = !effectiveMute;
+      });
+    }
+
     Object.values(remoteAudioElementsRef.current).forEach(audio => {
+      audio.muted = newDeaf;
+    });
+
+    Object.values(remoteScreenAudioElementsRef.current).forEach(audio => {
       audio.muted = newDeaf;
     });
 
     if (activeVoiceChannel) {
       socket.emit('voice:mute_update', {
         channelId: activeVoiceChannel.id,
-        isMuted,
+        isMuted: effectiveMute,
         isDeafened: newDeaf
       });
     }
@@ -1008,6 +1295,36 @@ export default function App() {
       return { ...prev, [socketId]: newMuted };
     });
   };
+
+  const handleScreenAudioVolumeChange = (socketId, volume) => {
+    setScreenAudioVolumes(prev => ({ ...prev, [socketId]: volume }));
+    const audio = remoteScreenAudioElementsRef.current[socketId];
+    if (audio) {
+      audio.volume = Math.max(0, Math.min(1, volume / 100));
+    }
+  };
+
+  const handleToggleScreenAudioMute = (socketId) => {
+    setScreenAudioMutes(prev => {
+      const newMuted = !prev[socketId];
+      const audio = remoteScreenAudioElementsRef.current[socketId];
+      if (audio) {
+        audio.muted = isDeafened || newMuted;
+      }
+      return { ...prev, [socketId]: newMuted };
+    });
+  };
+
+  // Sync screen audio elements whenever volumes, mutes, or deafen changes
+  useEffect(() => {
+    for (const [socketId, audio] of Object.entries(remoteScreenAudioElementsRef.current)) {
+      if (audio) {
+        audio.muted = isDeafened || !!screenAudioMutes[socketId] || !!userMutes[socketId];
+        const vol = screenAudioVolumes[socketId] ?? 100;
+        audio.volume = Math.max(0, Math.min(1, vol / 100));
+      }
+    }
+  }, [screenAudioMutes, screenAudioVolumes, userMutes, isDeafened]);
 
   const handleForceMuteMic = (targetSocketId) => {
     if (activeVoiceChannel) {
@@ -1084,9 +1401,11 @@ export default function App() {
           isDeafened={isDeafened}
           isSpeaking={isSpeaking}
           isScreenSharing={isScreenSharing}
+          isCameraOn={isCameraOn}
           onToggleMute={handleToggleMute}
           onToggleDeafen={handleToggleDeafen}
           onToggleScreenShare={handleToggleScreenShare}
+          onToggleCamera={handleToggleCamera}
           onLeaveVoice={leaveVoiceChannel}
           onOpenSettings={() => setShowProfileModal(true)}
         />
@@ -1100,7 +1419,6 @@ export default function App() {
         currentUser={currentUser}
         typingUsers={typingUsers}
         onTyping={handleTyping}
-        toggleUserSidebar={() => setShowUserSidebar(!showUserSidebar)}
         // Voice & Screen Share
         activeVoiceChannel={activeVoiceChannel}
         voiceRooms={voiceRooms}
@@ -1110,12 +1428,42 @@ export default function App() {
         isMuted={isMuted}
         onToggleMute={handleToggleMute}
         isScreenSharing={isScreenSharing}
+        isCameraOn={isCameraOn}
         onToggleScreenShare={handleToggleScreenShare}
+        onToggleCamera={handleToggleCamera}
         screenStream={screenStream}
+        cameraStream={cameraStream}
         remoteScreenStreams={remoteScreenStreams}
+        screenAudioVolumes={screenAudioVolumes}
+        screenAudioMutes={screenAudioMutes}
+        onScreenAudioVolumeChange={handleScreenAudioVolumeChange}
+        onToggleScreenAudioMute={handleToggleScreenAudioMute}
       />
 
-      {showUserSidebar && <UserList users={users} voiceRooms={voiceRooms} />}
+      {/* Screen Share Audio Notification Toast */}
+      {audioNotice && (
+        <div style={{
+          position: 'fixed',
+          bottom: '80px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'rgba(20, 22, 28, 0.95)',
+          border: '1px solid var(--border-neon)',
+          boxShadow: 'var(--shadow-popup)',
+          backdropFilter: 'blur(8px)',
+          color: '#fff',
+          padding: '10px 18px',
+          borderRadius: '8px',
+          fontSize: '13px',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <span>{audioNotice}</span>
+        </div>
+      )}
 
       {/* Modals */}
       {showShareModal && (
@@ -1161,8 +1509,12 @@ export default function App() {
           currentUser={currentUser}
           volume={userVolumes[selectedVoiceMember.socketId] ?? 100}
           isLocallyMuted={!!userMutes[selectedVoiceMember.socketId]}
+          streamVolume={screenAudioVolumes[selectedVoiceMember.socketId] ?? 100}
+          isStreamMuted={!!screenAudioMutes[selectedVoiceMember.socketId]}
           onVolumeChange={(vol) => handleUserVolumeChange(selectedVoiceMember.socketId, vol)}
           onToggleLocalMute={() => handleToggleLocalMuteUser(selectedVoiceMember.socketId)}
+          onStreamVolumeChange={(vol) => handleScreenAudioVolumeChange(selectedVoiceMember.socketId, vol)}
+          onToggleStreamMute={() => handleToggleScreenAudioMute(selectedVoiceMember.socketId)}
           onForceMuteMic={() => handleForceMuteMic(selectedVoiceMember.socketId)}
           onMoveChannel={(targetChannelId) => handleMoveUserChannel(selectedVoiceMember.socketId, targetChannelId)}
           onWatchStream={() => {

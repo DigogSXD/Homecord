@@ -1,0 +1,19 @@
+{
+  "channels": [
+    {
+      "id": "text-1789246491858",
+      "name": "teste",
+      "type": "text",
+      "topic": ""
+    },
+    {
+      "id": "voice-1789246511612",
+      "name": "teste2",
+      "type": "voice",
+      "topic": ""
+    }
+  ],
+  "messages": {
+    "text-1789246491858": []
+  }
+}

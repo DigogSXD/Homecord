@@ -241,7 +241,12 @@ io.on('connection', (socket) => {
       isMuted: false,
       isDeafened: false,
       isSpeaking: false,
-      isStreaming: false
+      isStreaming: false,
+      isCameraOn: false,
+      screenStreamId: null,
+      cameraStreamId: null,
+      screenTrackId: null,
+      cameraTrackId: null
     };
 
     room.set(socket.id, voiceState);
@@ -261,8 +266,14 @@ io.on('connection', (socket) => {
           socketId: peerId,
           user: peer.user,
           isMuted: peer.isMuted,
+          isDeafened: peer.isDeafened,
           isSpeaking: peer.isSpeaking,
-          isStreaming: peer.isStreaming || false
+          isStreaming: peer.isStreaming || false,
+          isCameraOn: peer.isCameraOn || false,
+          screenStreamId: peer.screenStreamId,
+          cameraStreamId: peer.cameraStreamId,
+          screenTrackId: peer.screenTrackId,
+          cameraTrackId: peer.cameraTrackId
         });
       }
     });
@@ -299,17 +310,34 @@ io.on('connection', (socket) => {
   });
 
   // Screen Share status update
-  socket.on('voice:stream_update', ({ channelId, isStreaming }) => {
+  socket.on('voice:stream_update', ({ channelId, isStreaming, streamId, trackId, hasAudio }) => {
     const room = voiceRooms.get(channelId);
     if (room && room.has(socket.id)) {
       const state = room.get(socket.id);
       state.isStreaming = isStreaming;
+      state.screenStreamId = isStreaming ? streamId : null;
+      state.screenTrackId = isStreaming ? trackId : null;
+      state.hasAudio = isStreaming ? !!hasAudio : false;
       io.emit('voice:stream_changed', {
         socketId: socket.id,
         user: state.user,
         channelId,
-        isStreaming
+        isStreaming,
+        streamId,
+        hasAudio: !!hasAudio
       });
+
+      io.emit('voice:state_update', getVoiceRoomsState());
+    }
+  });
+
+  socket.on('voice:camera_update', ({ channelId, isCameraOn, streamId, trackId }) => {
+    const room = voiceRooms.get(channelId);
+    if (room && room.has(socket.id)) {
+      const state = room.get(socket.id);
+      state.isCameraOn = isCameraOn;
+      state.cameraStreamId = isCameraOn ? streamId : null;
+      state.cameraTrackId = isCameraOn ? trackId : null;
       io.emit('voice:state_update', getVoiceRoomsState());
     }
   });

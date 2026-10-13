@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mic, MicOff, Headphones, PhoneOff, Settings, Signal, Monitor, MonitorOff, Users } from 'lucide-react';
+import { Mic, MicOff, Headphones, PhoneOff, Signal, Monitor, MonitorOff, Camera, CameraOff, Users } from 'lucide-react';
 
 export default function VoiceBar({
   currentUser,
@@ -10,9 +10,11 @@ export default function VoiceBar({
   isDeafened,
   isSpeaking,
   isScreenSharing,
+  isCameraOn,
   onToggleMute,
   onToggleDeafen,
   onToggleScreenShare,
+  onToggleCamera,
   onLeaveVoice,
   onOpenSettings
 }) {
@@ -84,9 +86,14 @@ export default function VoiceBar({
             <Headphones size={18} />
           </button>
 
-          <button className="icon-btn" title="Configurações" onClick={onOpenSettings}>
-            <Settings size={18} />
+          <button
+            className={`icon-btn ${isCameraOn ? 'active-success' : ''}`}
+            title={isCameraOn ? 'Desligar webcam' : 'Ligar webcam'}
+            onClick={onToggleCamera}
+          >
+            {isCameraOn ? <CameraOff size={18} /> : <Camera size={18} />}
           </button>
+
         </div>
       </div>
     </div>

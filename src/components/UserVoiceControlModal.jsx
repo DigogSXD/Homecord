@@ -8,8 +8,12 @@ export default function UserVoiceControlModal({
   currentUser,
   volume = 100,
   isLocallyMuted = false,
+  streamVolume = 100,
+  isStreamMuted = false,
   onVolumeChange,
   onToggleLocalMute,
+  onStreamVolumeChange,
+  onToggleStreamMute,
   onForceMuteMic,
   onMoveChannel,
   onWatchStream,
@@ -89,6 +93,40 @@ export default function UserVoiceControlModal({
             >
               {isLocallyMuted ? <Volume2 size={16} /> : <VolumeX size={16} />}
               {isLocallyMuted ? 'Desmutar Usuário para Mim' : 'Mutar Usuário para Mim'}
+            </button>
+          </div>
+        )}
+
+        {/* Section 1.5: Stream Audio Control (Volume & Mute for Stream) */}
+        {!isSelf && member.isStreaming && (
+          <div style={{ background: 'var(--bg-darkest)', padding: '14px', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '12px', border: '1px solid var(--border-subtle)' }}>
+            <div className="input-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Monitor size={15} style={{ color: 'var(--neon-purple)' }} /> Volume da Transmissão de Tela
+              </span>
+              <span style={{ color: 'var(--neon-purple)', fontWeight: 'bold' }}>{isStreamMuted ? 'MUDO (0%)' : `${streamVolume}%`}</span>
+            </div>
+
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={isStreamMuted ? 0 : streamVolume}
+              onChange={(e) => onStreamVolumeChange && onStreamVolumeChange(Number(e.target.value))}
+              style={{
+                width: '100%',
+                accentColor: 'var(--neon-purple)',
+                cursor: 'pointer'
+              }}
+            />
+
+            <button
+              className={`btn-secondary ${isStreamMuted ? 'active-danger' : ''}`}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px' }}
+              onClick={onToggleStreamMute}
+            >
+              {isStreamMuted ? <Volume2 size={16} /> : <VolumeX size={16} />}
+              {isStreamMuted ? 'Desmutar Som da Tela para Mim' : 'Mutar Som da Tela para Mim'}
             </button>
           </div>
         )}

@@ -5,7 +5,9 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"node server.js\" \"vite\"",
+    "dev": "node start-tunnel.js",
+    "dev:local": "concurrently \"node server.js\" \"vite\"",
+    "tunnel": "node start-tunnel.js",
     "server": "node server.js",
     "client": "vite",
     "build": "vite build",

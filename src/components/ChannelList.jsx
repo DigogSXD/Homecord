@@ -188,6 +188,7 @@ export default function ChannelList({
                             </span>
                           )}
                           {member.isMuted && <MicOff size={12} style={{ color: 'var(--accent-red)', marginLeft: 'auto' }} />}
+                          {member.isDeafened && <VolumeX size={12} style={{ color: 'var(--accent-red)', marginLeft: member.isMuted ? '4px' : 'auto' }} />}
                         </div>
 
                         {/* Inline Volume Slider Popover right under the member card */}

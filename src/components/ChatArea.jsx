@@ -1,10 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Hash, Send, Paperclip, Smile, Trash2, Image as ImageIcon, Users, Volume2, Mic, MicOff, PhoneOff, Monitor, MonitorOff, Maximize2, ZoomIn, RotateCcw, LayoutGrid } from 'lucide-react';
+import { Hash, Send, Paperclip, Smile, Trash2, Image as ImageIcon, Volume2, VolumeX, Mic, MicOff, PhoneOff, Monitor, MonitorOff, Camera, Maximize2, ZoomIn, RotateCcw, LayoutGrid } from 'lucide-react';
 
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '💩', '😎', '💀', '👀', '🎮'];
 
 // Sub-component for individual Stream Video Player with Zoom, Pan, Fullscreen & Stream Header
-function StreamVideoPlayer({ streamObj, isMultiView = false, onFocusStream }) {
+function StreamVideoPlayer({
+  streamObj,
+  isMultiView = false,
+  onFocusStream,
+  volume = 100,
+  isMuted = false,
+  onVolumeChange,
+  onToggleMute
+}) {
   const videoRef = useRef(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [panPos, setPanPos] = useState({ x: 0, y: 0 });
@@ -17,6 +25,7 @@ function StreamVideoPlayer({ streamObj, isMultiView = false, onFocusStream }) {
       videoRef.current.muted = true;
       videoRef.current.volume = 0;
     }
+
   }, [streamObj?.stream]);
 
   const handleWheel = (e) => {
@@ -125,7 +134,7 @@ function StreamVideoPlayer({ streamObj, isMultiView = false, onFocusStream }) {
         pointerEvents: 'none',
         zIndex: 2
       }}>
-        <Monitor size={14} style={{ color: 'var(--accent-green)' }} />
+        {streamObj?.isCamera ? <Camera size={14} style={{ color: 'var(--accent-green)' }} /> : <Monitor size={14} style={{ color: 'var(--accent-green)' }} />}
         <span>{streamObj?.name}</span>
         <span className="live-badge">AO VIVO</span>
         <span style={{ background: 'rgba(0, 242, 254, 0.2)', color: 'var(--neon-cyan)', fontSize: '10px', fontWeight: 'bold', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-neon)' }}>
@@ -143,6 +152,85 @@ function StreamVideoPlayer({ streamObj, isMultiView = false, onFocusStream }) {
         gap: '6px',
         zIndex: 2
       }}>
+        {/* Stream Audio Controls & Indicators */}
+        {streamObj?.isLocal ? (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            background: 'rgba(0,0,0,0.75)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: '6px',
+            padding: '4px 8px',
+            fontSize: '11px',
+            backdropFilter: 'blur(4px)'
+          }}>
+            {streamObj.hasAudio ? (
+              <span style={{ color: 'var(--accent-green)', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 'bold' }}>
+                <Volume2 size={13} /> Áudio Ativo
+              </span>
+            ) : (
+              <span title="Para transmitir o som da tela, marque 'Compartilhar áudio do sistema' ao iniciar o streaming" style={{ color: '#ffa500', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <VolumeX size={13} /> Sem Som da Tela
+              </span>
+            )}
+          </div>
+        ) : (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'rgba(0,0,0,0.75)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: '6px',
+            padding: '3px 8px',
+            backdropFilter: 'blur(4px)'
+          }}>
+            {streamObj?.hasAudio !== false ? (
+              <>
+                <button
+                  type="button"
+                  onClick={onToggleMute}
+                  title={isMuted ? "Desmutar som da transmissão" : "Mutar som da transmissão"}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: isMuted ? 'var(--neon-red)' : 'var(--neon-cyan)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '2px'
+                  }}
+                >
+                  {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={isMuted ? 0 : volume}
+                  onChange={(e) => onVolumeChange && onVolumeChange(Number(e.target.value))}
+                  style={{
+                    width: '65px',
+                    accentColor: 'var(--neon-cyan)',
+                    cursor: 'pointer'
+                  }}
+                  title={`Volume da transmissão: ${isMuted ? 'Mudo' : `${volume}%`}`}
+                />
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)', minWidth: '26px' }}>
+                  {isMuted ? '0%' : `${volume}%`}
+                </span>
+              </>
+            ) : (
+              <span
+                title="Esta transmissão não possui áudio capturado"
+                style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-muted)', fontSize: '11px' }}
+              >
+                <VolumeX size={13} /> Sem áudio
+              </span>
+            )}
+          </div>
+        )}
         {isMultiView && onFocusStream && (
           <button
             onClick={() => onFocusStream(streamObj.id)}
@@ -206,6 +294,57 @@ function StreamVideoPlayer({ streamObj, isMultiView = false, onFocusStream }) {
   );
 }
 
+function ParticipantCamera({ stream }) {
+  const videoRef = useRef(null);
+  const [size, setSize] = useState(180);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream || null;
+    }
+  }, [stream]);
+
+  if (!stream) return null;
+
+  return (
+    <div style={{ position: 'relative', width: `${size}px`, flexShrink: 0 }}>
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        style={{
+          display: 'block',
+          width: '100%',
+          height: `${Math.round(size * 0.62)}px`,
+          objectFit: 'cover',
+          borderRadius: '6px',
+          border: '1px solid var(--border-neon)',
+          background: '#000'
+        }}
+      />
+      <div style={{ position: 'absolute', top: '4px', right: '4px', display: 'flex', gap: '3px' }}>
+        <button
+          type="button"
+          title="Diminuir webcam"
+          onClick={() => setSize(value => Math.max(120, value - 20))}
+          style={{ padding: '1px 5px', border: 'none', borderRadius: '3px', background: 'rgba(0,0,0,0.7)', color: '#fff', cursor: 'pointer' }}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          title="Aumentar webcam"
+          onClick={() => setSize(value => Math.min(320, value + 20))}
+          style={{ padding: '1px 5px', border: 'none', borderRadius: '3px', background: 'rgba(0,0,0,0.7)', color: '#fff', cursor: 'pointer' }}
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatArea({
   channel,
   messages,
@@ -214,7 +353,6 @@ export default function ChatArea({
   currentUser,
   typingUsers,
   onTyping,
-  toggleUserSidebar,
   // Voice & Screen Share props
   activeVoiceChannel,
   voiceRooms,
@@ -226,7 +364,13 @@ export default function ChatArea({
   isScreenSharing,
   onToggleScreenShare,
   screenStream,
-  remoteScreenStreams = {}
+  isCameraOn,
+  cameraStream,
+  remoteScreenStreams = {},
+  screenAudioVolumes = {},
+  screenAudioMutes = {},
+  onScreenAudioVolumeChange,
+  onToggleScreenAudioMute
 }) {
   const [inputText, setInputText] = useState('');
   const [attachment, setAttachment] = useState(null);
@@ -241,25 +385,34 @@ export default function ChatArea({
 
   // 1. Local stream if local user is sharing
   if (isScreenSharing && screenStream) {
+    const hasAudio = screenStream.getAudioTracks().length > 0;
     availableStreams.push({
       id: 'local',
+      socketId: currentUser?.id,
       name: `${currentUser?.name || 'Você'} (Sua Tela)`,
       stream: screenStream,
-      isLocal: true
+      isLocal: true,
+      hasAudio
     });
   }
 
   // 2. Remote streams from other members
   members.forEach((m) => {
-    if (m.isStreaming && m.user) {
-      const stream = remoteScreenStreams[m.socketId];
+    if ((m.isStreaming || m.isCameraOn) && m.user) {
+      const remoteStreams = remoteScreenStreams[m.socketId] || {};
       if (m.user?.name !== currentUser?.name) {
-        availableStreams.push({
-          id: m.socketId,
-          name: `Transmissão de ${m.user.name}`,
-          stream,
-          isLocal: false
-        });
+        if (m.isStreaming && (remoteStreams[m.screenStreamId] || remoteStreams[m.screenTrackId] || remoteStreams.screenStream)) {
+          const st = remoteStreams[m.screenStreamId] || remoteStreams[m.screenTrackId] || remoteStreams.screenStream;
+          const hasAudio = st ? st.getAudioTracks().length > 0 : !!m.hasAudio;
+          availableStreams.push({
+            id: `${m.socketId}-screen`,
+            socketId: m.socketId,
+            name: `Transmissão de ${m.user.name}`,
+            stream: st,
+            isLocal: false,
+            hasAudio
+          });
+        }
       }
     }
   });
@@ -340,29 +493,14 @@ export default function ChatArea({
 
     return (
       <div className="main-chat">
-        {/* Header */}
-        <div className="chat-header">
-          <div className="chat-header-left">
-            <Volume2 size={24} style={{ color: 'var(--accent-green)' }} />
-            <span>{channel.name}</span>
-            <span className="chat-header-topic" style={{ color: 'var(--accent-green)', fontWeight: '500' }}>
-              {isConnectedToThisVoice ? `🟢 Voz Conectada • Ping: ${ping || 12}ms` : 'Canal de Voz'} • {members.length} {members.length === 1 ? 'pessoa' : 'pessoas'} na call
-            </span>
-          </div>
-
-          <div className="chat-header-right">
-            <button className="icon-btn" title="Alternar Lista de Membros" onClick={toggleUserSidebar}>
-              <Users size={20} />
-            </button>
-          </div>
-        </div>
-
         {/* Voice Room Body */}
         <div style={{ flex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
           
           {/* Multi-Stream Video Player Section */}
-          {availableStreams.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {(availableStreams.length > 0 || members.some(member => member.isCameraOn) || (isCameraOn && cameraStream)) && (
+            <>
+              {availableStreams.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {/* Tab Selector Bar */}
               <div className="stream-selector-bar">
                 <span className="stream-selector-label">
@@ -404,6 +542,10 @@ export default function ChatArea({
                       streamObj={st}
                       isMultiView={true}
                       onFocusStream={(id) => setActiveStreamTab(id)}
+                      volume={st.socketId ? (screenAudioVolumes[st.socketId] ?? 100) : 100}
+                      isMuted={st.socketId ? !!screenAudioMutes[st.socketId] : false}
+                      onVolumeChange={(vol) => st.socketId && onScreenAudioVolumeChange && onScreenAudioVolumeChange(st.socketId, vol)}
+                      onToggleMute={() => st.socketId && onToggleScreenAudioMute && onToggleScreenAudioMute(st.socketId)}
                     />
                   ))}
                 </div>
@@ -416,85 +558,64 @@ export default function ChatArea({
                       key={focusedStream?.id || 'single'}
                       streamObj={focusedStream}
                       isMultiView={false}
+                      volume={focusedStream?.socketId ? (screenAudioVolumes[focusedStream.socketId] ?? 100) : 100}
+                      isMuted={focusedStream?.socketId ? !!screenAudioMutes[focusedStream.socketId] : false}
+                      onVolumeChange={(vol) => focusedStream?.socketId && onScreenAudioVolumeChange && onScreenAudioVolumeChange(focusedStream.socketId, vol)}
+                      onToggleMute={() => focusedStream?.socketId && onToggleScreenAudioMute && onToggleScreenAudioMute(focusedStream.socketId)}
                     />
                   );
                 })()
               )}
-            </div>
-          )}
-
-          {/* Connected Voice Members Grid */}
-          <div>
-            <h3 style={{ fontSize: '14px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '16px' }}>
-              Membros Conectados no Canal — ({members.length})
-            </h3>
-
-            {members.length === 0 ? (
-              <div style={{
-                background: 'var(--bg-darker)',
-                padding: '32px',
-                borderRadius: '12px',
-                textAlign: 'center',
-                color: 'var(--text-muted)'
-              }}>
-                <Volume2 size={48} style={{ marginBottom: '12px', opacity: 0.5 }} />
-                <p>Ninguém conectado neste canal de voz no momento.</p>
               </div>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '16px' }}>
-                {members.map((m) => (
-                  <div
-                    key={m.socketId}
-                    style={{
-                      background: 'var(--bg-darker)',
-                      borderRadius: '12px',
-                      padding: '20px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      gap: '12px',
-                      border: m.isStreaming ? '2px solid var(--neon-red)' : m.isSpeaking ? '2px solid var(--accent-green)' : '1px solid var(--border-subtle)',
-                      boxShadow: m.isStreaming ? '0 0 12px rgba(255, 59, 92, 0.4)' : m.isSpeaking ? '0 0 12px rgba(35, 165, 90, 0.4)' : 'none',
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    <div style={{
-                      width: '64px',
-                      height: '64px',
-                      borderRadius: '50%',
-                      backgroundColor: m.user?.color || '#5865F2',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '32px',
-                      position: 'relative'
-                    }}>
-                      {m.user?.avatar || '👤'}
-                    </div>
+              )}
 
-                    <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
-                      <div style={{ fontWeight: 'bold', color: 'var(--text-header)', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span>{m.user?.name}</span>
-                        {m.isStreaming && <span className="live-badge">AO VIVO</span>}
-                      </div>
-                      <div style={{ fontSize: '11px', color: m.isStreaming ? 'var(--neon-red)' : m.isSpeaking ? 'var(--accent-green)' : 'var(--text-muted)' }}>
-                        {m.isStreaming ? 'Transmitindo Tela' : m.isSpeaking ? 'Falando...' : m.isMuted ? 'Mudo' : 'Conectado'}
-                      </div>
-                      {m.isStreaming && (
-                        <button
-                          className="btn-secondary"
-                          style={{ padding: '3px 8px', fontSize: '11px', marginTop: '6px', color: 'var(--neon-cyan)', borderColor: 'var(--border-neon)' }}
-                          onClick={() => setActiveStreamTab(m.socketId)}
-                        >
-                          🎥 Assistir Live
-                        </button>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
+              {members.map((member) => {
+                const participantCamera = member.user?.name === currentUser?.name
+                  ? (isCameraOn ? cameraStream : null)
+                  : (
+                    remoteScreenStreams[member.socketId]?.[member.cameraStreamId] ||
+                    remoteScreenStreams[member.socketId]?.[member.cameraTrackId] ||
+                    remoteScreenStreams[member.socketId]?.cameraStream ||
+                    (member.isCameraOn && !member.isStreaming
+                      ? Object.values(remoteScreenStreams[member.socketId] || {})[0]
+                      : null)
+                  );
+
+                return (
+                <div key={member.socketId} className="user-item-card" style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: participantCamera ? 'center' : 'flex-start',
+                  gap: '10px',
+                  padding: participantCamera ? '8px' : undefined
+                }}>
+                  {participantCamera ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
+                      <ParticipantCamera stream={participantCamera} />
+                      {(member.isStreaming || (member.user?.name === currentUser?.name && isScreenSharing)) && (
+                        <span className="live-badge">Transmitindo tela</span>
                       )}
                     </div>
-                  </div>
-                ))}
+                  ) : (
+                    <>
+                      <div className={`avatar-img ${member.isSpeaking ? 'speaking' : ''}`} style={{ backgroundColor: member.user?.color || '#5865F2' }}>
+                        {member.user?.avatar || '👤'}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                        <span className="user-display-name">{member.user?.name}</span>
+                        <span style={{ fontSize: '11px', color: member.isMuted ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+                          {member.isMuted ? 'Mudo' : member.isStreaming ? 'Transmitindo tela' : member.isCameraOn ? 'Webcam ao vivo' : 'Conectado'}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+                );
+              })}
               </div>
-            )}
-          </div>
+            </>
+          )}
 
           {/* Main Action Bar for Voice Channel */}
           <div style={{
@@ -569,11 +690,6 @@ export default function ChatArea({
           )}
         </div>
 
-        <div className="chat-header-right">
-          <button className="icon-btn" title="Alternar Lista de Membros" onClick={toggleUserSidebar}>
-            <Users size={20} />
-          </button>
-        </div>
       </div>
 
       {/* Messages */}
