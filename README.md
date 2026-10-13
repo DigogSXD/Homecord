@@ -50,6 +50,7 @@ O **Discord 2 (Homecord)** é uma aplicação web moderna, rápida e auto-hosped
 Certifique-se de ter instalado em sua máquina:
 - [Node.js](https://nodejs.org/) (versão 18 ou superior)
 - [Git](https://git-scm.com/)
+- [Cloudflare Tunnel (`cloudflared`)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) (necessário para gerar um link público)
 
 ---
 
@@ -66,16 +67,22 @@ Certifique-se de ter instalado em sua máquina:
    npm install
    ```
 
-3. **Inicie o ambiente de desenvolvimento**:
+3. **Inicie o aplicativo com o túnel Cloudflare**:
    ```bash
    npm run dev
    ```
 
-O comando `npm run dev` iniciará simultaneamente:
-- **Backend (Node/Express/Socket.IO)** em `http://localhost:5000`
-- **Frontend (Vite/React)** em `http://localhost:5173`
+O comando inicia o backend, a interface e o túnel Cloudflare. O `cloudflared` precisa estar instalado e disponível no terminal (comando `cloudflared`). O túnel encaminha o tráfego público para a interface local:
 
-Abra o seu navegador em `http://localhost:5173` para acessar a aplicação.
+- **Backend (Node/Express/Socket.IO)** em `http://localhost:5000`
+- **Frontend (Vite/React)** em `http://localhost:3000`
+- **Túnel Cloudflare** encaminhando para `http://localhost:3000`
+
+Quando o túnel conectar, o endereço público `https://....trycloudflare.com` será exibido no terminal e salvo em `LINK_ATUAL.txt`. Abra esse endereço no navegador para testar ou envie-o aos seus amigos. Na mesma máquina, também é possível acessar a interface por `http://localhost:3000`.
+
+**Importante:** esse é um link temporário do Cloudflare Quick Tunnel. Mantenha o terminal aberto enquanto outras pessoas estiverem usando o aplicativo. Ao fechar o terminal com `Ctrl+C`, o servidor e o túnel são encerrados; ao iniciar novamente, o endereço pode mudar. Confira o terminal ou `LINK_ATUAL.txt` e envie o novo endereço. O arquivo `LINK_ATUAL.txt` é local e não é publicado no GitHub.
+
+Para executar apenas na rede local, sem túnel Cloudflare, use `npm run dev:local` e abra `http://localhost:3000`. Para disponibilizar o app com um endereço permanente, configure um túnel nomeado e um domínio na sua conta Cloudflare.
 
 ---
 
@@ -85,7 +92,9 @@ No arquivo `package.json`, você encontrará os seguintes scripts:
 
 | Comando | Descrição |
 | :--- | :--- |
-| `npm run dev` | Executa o servidor backend e a interface Vite em paralelo (modo desenvolvimento). |
+| `npm run dev` | Executa o backend, a interface Vite e o túnel Cloudflare (requer `cloudflared`). |
+| `npm run dev:local` | Executa o backend e a interface Vite sem túnel Cloudflare. |
+| `npm run tunnel` | Inicia o backend, a interface Vite e o túnel Cloudflare. |
 | `npm run server` | Executa apenas o servidor Node.js backend. |
 | `npm run client` | Executa apenas o servidor de desenvolvimento do Vite. |
 | `npm run build` | Compila os arquivos do frontend para produção na pasta `dist/`. |
